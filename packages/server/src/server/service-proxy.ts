@@ -3,6 +3,7 @@ import net from "node:net";
 import { createHash } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import express, { type RequestHandler } from "express";
 import type { Logger } from "pino";
 
@@ -363,7 +364,7 @@ function proxyUpgradeRequest({
   logger,
 }: {
   req: IncomingMessage;
-  socket: net.Socket;
+  socket: Duplex;
   head: Buffer;
   route: ServiceProxyRoute;
   logger: Logger;
@@ -783,16 +784,17 @@ export function createScriptProxyUpgradeHandler({
   routeStore: ServiceProxyRouteRegistry;
   logger: Logger;
   passthroughUnknown?: boolean;
-}): (req: IncomingMessage, socket: net.Socket, head: Buffer) => void {
+}): (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean {
   return (req, socket, head) => {
     const classification = routeStore.classifyHost(req.headers.host);
     if (classification.type !== "registered-service") {
       if (!passthroughUnknown) {
         socket.destroy();
       }
-      return;
+      return false;
     }
     proxyUpgradeRequest({ req, socket, head, route: classification.route, logger });
+    return true;
   };
 }
 
@@ -829,7 +831,7 @@ export interface ServiceProxySubsystem {
   middleware(): RequestHandler;
   upgradeHandler(options: {
     passthroughUnknown: boolean;
-  }): (req: IncomingMessage, socket: net.Socket, head: Buffer) => void;
+  }): (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
   startStandalone(options: {
     listenTarget: ServiceProxyListenTarget;
   }): Promise<ServiceProxyListenTarget>;
@@ -923,7 +925,7 @@ class NodeServiceProxySubsystem implements ServiceProxySubsystem {
 
   upgradeHandler(options: {
     passthroughUnknown: boolean;
-  }): (req: IncomingMessage, socket: net.Socket, head: Buffer) => void {
+  }): (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean {
     // Pass passthroughUnknown explicitly: the factory defaults it to true, the
     // subsystem requires callers to choose.
     return createScriptProxyUpgradeHandler({

@@ -4,6 +4,7 @@ import { CreationService } from "./creation/index.js";
 import { MessageReceipts } from "./message-receipts/index.js";
 import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage, Server as HTTPServer } from "http";
+import type { Duplex } from "node:stream";
 import { join } from "path";
 import { hostname as getHostname } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -518,6 +519,7 @@ function requireWebSocketServices(params: {
 export class VoiceAssistantWebSocketServer {
   private readonly logger: pino.Logger;
   private readonly wss: WebSocketServer;
+  private detachUpgradeListener: (() => void) | null = null;
   private readonly pendingConnections: Map<WebSocketLike, PendingConnection> = new Map();
   private readonly sessions: Map<WebSocketLike, SessionConnection> = new Map();
   private readonly socketIdentities: Map<WebSocketLike, WebSocketConnectionIdentity> = new Map();
@@ -747,7 +749,8 @@ export class VoiceAssistantWebSocketServer {
       logger: this.logger,
     });
 
-    this.wss = this.createWebSocketServer(server, wsConfig, auth);
+    this.wss = this.createWebSocketServer(wsConfig, auth);
+    this.attachUpgradeListener(server);
     this.startRuntimeMetricsInterval();
     this.startApplicationSocketLeaseInterval();
 
@@ -807,13 +810,12 @@ export class VoiceAssistantWebSocketServer {
   }
 
   private createWebSocketServer(
-    server: HTTPServer,
     wsConfig: WebSocketServerConfig,
     auth: DaemonAuthConfig | undefined,
   ): WebSocketServer {
     const password = auth?.password;
     const wss = new WebSocketServer({
-      server,
+      noServer: true,
       path: "/ws",
       handleProtocols: (protocols) => selectWebSocketProtocol(protocols, password),
       verifyClient: ({ req }, callback) => {
@@ -829,6 +831,24 @@ export class VoiceAssistantWebSocketServer {
       void this.attachAuthenticatedSocket(ws, request, password);
     });
     return wss;
+  }
+
+  private attachUpgradeListener(server: HTTPServer): void {
+    // Node invokes every upgrade listener. Dispatch through one listener so the
+    // service proxy and Paseo never write competing handshakes to one socket.
+    const handleServiceProxyUpgrade = this.serviceProxy?.upgradeHandler({
+      passthroughUnknown: true,
+    });
+    const handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
+      if (handleServiceProxyUpgrade?.(request, socket, head)) {
+        return;
+      }
+      this.wss.handleUpgrade(request, socket, head, (webSocket) => {
+        this.wss.emit("connection", webSocket, request);
+      });
+    };
+    server.on("upgrade", handleUpgrade);
+    this.detachUpgradeListener = () => server.off("upgrade", handleUpgrade);
   }
 
   private startRuntimeMetricsInterval(): void {
@@ -1109,6 +1129,8 @@ export class VoiceAssistantWebSocketServer {
     this.sessions.clear();
     this.socketIdentities.clear();
     this.externalSessionsByKey.clear();
+    this.detachUpgradeListener?.();
+    this.detachUpgradeListener = null;
     this.wss.close();
   }
 
