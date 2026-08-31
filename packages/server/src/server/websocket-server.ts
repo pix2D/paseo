@@ -71,10 +71,7 @@ import {
   isPushEligibleAttentionReason,
   type ClientPresenceState,
 } from "./agent-attention-policy.js";
-import {
-  buildAgentAttentionNotificationPayload,
-  findLatestPermissionRequest,
-} from "@getpaseo/protocol/agent-attention-notification";
+import { buildAgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import {
@@ -2477,6 +2474,16 @@ export class VoiceAssistantWebSocketServer {
     };
   }
 
+  private async getAgentAttentionNotificationBody(workspaceId: string): Promise<string> {
+    const workspace = await this.workspaceRegistry.get(workspaceId);
+    const project = workspace ? await this.projectRegistry.get(workspace.projectId) : null;
+    const projectName = project ? (project.customName ?? project.displayName) : null;
+    const workspaceName = workspace ? (workspace.title ?? workspace.displayName) : null;
+    return projectName && workspaceName
+      ? `${projectName}: ${workspaceName}`
+      : "Open Paseo for details.";
+  }
+
   private async broadcastAgentAttention(params: {
     agentId: string;
     provider: AgentProvider;
@@ -2509,15 +2516,16 @@ export class VoiceAssistantWebSocketServer {
     );
     const allStates = notificationEntries.map((e) => e.state);
     const nowMs = Date.now();
-    const assistantMessage = await this.agentManager.getLastAssistantMessage(params.agentId);
-    const notification = buildAgentAttentionNotificationPayload({
-      reason: params.reason,
-      serverId: this.serverId,
-      workspaceId: agent.workspaceId,
-      agentId: params.agentId,
-      assistantMessage,
-      permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
-    });
+    const body = await this.getAgentAttentionNotificationBody(agent.workspaceId);
+    const notification = {
+      ...buildAgentAttentionNotificationPayload({
+        reason: params.reason,
+        serverId: this.serverId,
+        workspaceId: agent.workspaceId,
+        agentId: params.agentId,
+      }),
+      body,
+    };
 
     const plan = computeNotificationPlan({
       allStates,
