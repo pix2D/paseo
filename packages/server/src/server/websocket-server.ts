@@ -66,10 +66,7 @@ import {
   isPushEligibleAttentionReason,
   type ClientPresenceState,
 } from "./agent-attention-policy.js";
-import {
-  buildAgentAttentionNotificationPayload,
-  findLatestPermissionRequest,
-} from "@getpaseo/protocol/agent-attention-notification";
+import { buildAgentAttentionNotificationPayload } from "@getpaseo/protocol/agent-attention-notification";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import {
@@ -2522,15 +2519,22 @@ export class VoiceAssistantWebSocketServer {
 
     const allStates = clientEntries.map((e) => e.state);
     const nowMs = Date.now();
-    const assistantMessage = await this.agentManager.getLastAssistantMessage(params.agentId);
-    const notification = buildAgentAttentionNotificationPayload({
-      reason: params.reason,
-      serverId: this.serverId,
-      workspaceId: agent.workspaceId,
-      agentId: params.agentId,
-      assistantMessage,
-      permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
-    });
+    const workspace = await this.workspaceRegistry.get(agent.workspaceId);
+    const project = workspace ? await this.projectRegistry.get(workspace.projectId) : null;
+    const projectName = project ? (project.customName ?? project.displayName) : null;
+    const workspaceName = workspace ? (workspace.title ?? workspace.displayName) : null;
+    const notification = {
+      ...buildAgentAttentionNotificationPayload({
+        reason: params.reason,
+        serverId: this.serverId,
+        workspaceId: agent.workspaceId,
+        agentId: params.agentId,
+      }),
+      body:
+        projectName && workspaceName
+          ? `${projectName}: ${workspaceName}`
+          : "Open Paseo for details.",
+    };
 
     const plan = computeNotificationPlan({
       allStates,

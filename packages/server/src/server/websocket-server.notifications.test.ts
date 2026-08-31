@@ -11,6 +11,12 @@ import { asInternals, createStub } from "./test-utils/class-mocks.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
 import type { PushNotificationSender, PushPayload } from "./push/index.js";
 import type { WorkspaceAutoName } from "./workspace-auto-name.js";
+import type {
+  PersistedProjectRecord,
+  PersistedWorkspaceRecord,
+  ProjectRegistry,
+  WorkspaceRegistry,
+} from "./workspace-registry.js";
 
 const WORKSPACE_ID = "workspace-1";
 
@@ -81,7 +87,56 @@ class RecordingPushNotificationSender implements PushNotificationSender {
   }
 }
 
-function createServer(agentManagerOverrides?: Record<string, unknown>) {
+interface RegistryOverrides {
+  projectRegistry?: ProjectRegistry;
+  workspaceRegistry?: WorkspaceRegistry;
+}
+
+function createProjectRecord(overrides?: Partial<PersistedProjectRecord>): PersistedProjectRecord {
+  return {
+    projectId: "project-1",
+    rootPath: "/tmp/project",
+    kind: "git",
+    displayName: "Derived project",
+    projectKey: null,
+    customName: "Paseo Fork",
+    customIconRevision: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+function createWorkspaceRecord(
+  overrides?: Partial<PersistedWorkspaceRecord>,
+): PersistedWorkspaceRecord {
+  return {
+    workspaceId: WORKSPACE_ID,
+    projectId: "project-1",
+    cwd: "/tmp/project/worktree",
+    kind: "worktree",
+    displayName: "Derived workspace",
+    title: "Sandbox",
+    branch: "sandbox",
+    worktreeRoot: "/tmp/project/worktree",
+    baseBranch: "main",
+    isPaseoOwnedWorktree: false,
+    mainRepoRoot: "/tmp/project",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    archivedAt: null,
+    autoArchivedChangeRequestUrl: null,
+    pinnedAt: null,
+    labels: [],
+    ...overrides,
+  };
+}
+
+function createServer(
+  agentManagerOverrides?: Record<string, unknown>,
+  registryOverrides: RegistryOverrides = {},
+) {
   const pushNotifications = new RecordingPushNotificationSender();
   const agentManager = {
     subscribe: vi.fn(() => () => {}),
@@ -122,8 +177,8 @@ function createServer(agentManagerOverrides?: Record<string, unknown>) {
     undefined,
     "1.2.3-test",
     undefined,
-    undefined,
-    undefined,
+    registryOverrides.projectRegistry,
+    registryOverrides.workspaceRegistry,
     createStub<ScheduleService>({}),
     createStub<CheckoutDiffManager>({
       subscribe: vi.fn(),
@@ -243,19 +298,29 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     expect(pushNotifications.sent).toHaveLength(1);
   });
 
-  it("uses assistant preview text for push notifications with markdown removed", async () => {
+  it("uses project and workspace names without reading assistant content", async () => {
     const getLastAssistantMessage = vi.fn(
-      async () => "**Done**. Updated `README.md` and [link](https://example.com).",
+      async () => "Sensitive agent output that must not leave the sandbox.",
     );
-    const { server, pushNotifications } = createServer({
-      getAgent: vi.fn(() => ({
-        config: { title: null },
-        cwd: "/tmp/worktree",
-        workspaceId: WORKSPACE_ID,
-        pendingPermissions: new Map(),
-      })),
-      getLastAssistantMessage,
-    });
+    const { server, pushNotifications } = createServer(
+      {
+        getAgent: vi.fn(() => ({
+          config: { title: null },
+          cwd: "/tmp/worktree",
+          workspaceId: WORKSPACE_ID,
+          pendingPermissions: new Map(),
+        })),
+        getLastAssistantMessage,
+      },
+      {
+        projectRegistry: createStub<ProjectRegistry>({
+          get: vi.fn(async () => createProjectRecord()),
+        }),
+        workspaceRegistry: createStub<WorkspaceRegistry>({
+          get: vi.fn(async () => createWorkspaceRecord()),
+        }),
+      },
+    );
 
     await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
       agentId: "agent-1",
@@ -266,7 +331,7 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     expect(pushNotifications.sent).toEqual([
       {
         title: "Agent finished",
-        body: "Done. Updated README.md and link.",
+        body: "Paseo Fork: Sandbox",
         data: {
           serverId: "srv-test",
           workspaceId: WORKSPACE_ID,
@@ -275,7 +340,45 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
         },
       },
     ]);
-    expect(getLastAssistantMessage).toHaveBeenCalledWith("agent-1");
+    expect(getLastAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it("uses project and workspace names instead of permission content", async () => {
+    const { server, pushNotifications } = createServer(
+      {
+        getAgent: vi.fn(() => ({
+          workspaceId: WORKSPACE_ID,
+          pendingPermissions: new Map([
+            [
+              "permission-1",
+              {
+                id: "permission-1",
+                provider: "claude",
+                name: "Bash",
+                kind: "tool",
+                input: { command: "sensitive command" },
+              },
+            ],
+          ]),
+        })),
+      },
+      {
+        projectRegistry: createStub<ProjectRegistry>({
+          get: vi.fn(async () => createProjectRecord()),
+        }),
+        workspaceRegistry: createStub<WorkspaceRegistry>({
+          get: vi.fn(async () => createWorkspaceRecord()),
+        }),
+      },
+    );
+
+    await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+      agentId: "agent-1",
+      provider: "claude",
+      reason: "permission",
+    });
+
+    expect(pushNotifications.sent[0]?.body).toBe("Paseo Fork: Sandbox");
   });
 
   it("sends push notifications regardless of UI label presence", async () => {
@@ -298,7 +401,8 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     });
 
     expect(pushNotifications.sent).toHaveLength(1);
-    expect(getLastAssistantMessage).toHaveBeenCalledWith("agent-2");
+    expect(pushNotifications.sent[0]?.body).toBe("Open Paseo for details.");
+    expect(getLastAssistantMessage).not.toHaveBeenCalled();
   });
 
   it("routes a hidden stale focused browser tab's notification to the present Electron web client", async () => {
@@ -342,7 +446,7 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     expect(pushNotifications.sent).toHaveLength(1);
   });
 
-  it("does not push error attention when the only connected client has never sent a heartbeat", async () => {
+  it("pushes error attention when the only connected client has never sent a heartbeat", async () => {
     const { server, pushNotifications } = createServer();
     const ws = connectClient(server, null);
 
@@ -353,6 +457,6 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
     });
 
     expect(readAttentionRequiredMessage(ws).shouldNotify).toBe(false);
-    expect(pushNotifications.sent).toEqual([]);
+    expect(pushNotifications.sent).toHaveLength(1);
   });
 });
