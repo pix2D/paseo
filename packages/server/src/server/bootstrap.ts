@@ -870,6 +870,7 @@ export async function createPaseoDaemon(
     logger,
     paseoHome: config.paseoHome,
     worktreesRoot: config.worktreesRoot,
+    backgroundNetworkEnabled: false,
     deps: {
       forgeOverrides: { github },
     },

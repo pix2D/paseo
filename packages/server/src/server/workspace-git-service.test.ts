@@ -248,6 +248,7 @@ function createGitHubServiceStub(): ForgeService {
 }
 
 interface CreateServiceTestOptions {
+  backgroundNetworkEnabled?: boolean;
   subscribe?: ReturnType<typeof vi.fn>;
   getCheckoutStatus?: ReturnType<typeof vi.fn>;
   getCheckoutSnapshotFacts?: ReturnType<typeof vi.fn>;
@@ -319,6 +320,7 @@ function createService(options?: CreateServiceTestOptions) {
   return new WorkspaceGitServiceImpl({
     logger: createLogger() as unknown as pino.Logger,
     paseoHome: "/tmp/paseo-test",
+    backgroundNetworkEnabled: options?.backgroundNetworkEnabled,
     deps,
   });
 }
@@ -850,6 +852,32 @@ describe("WorkspaceGitServiceImpl", () => {
 
     expect(getPullRequestStatus).toHaveBeenCalledTimes(1);
     expect(resolveAbsoluteGitDir).toHaveBeenCalledTimes(0);
+
+    subscription.unsubscribe();
+    service.dispose();
+  });
+
+  test("disabled background networking does not fetch remotes or poll for forge status", async () => {
+    const runGitFetch = vi.fn(async () => ({ changes: [], error: null }));
+    const retainCurrentPullRequestStatusPoll = vi.fn(() => ({ unsubscribe: vi.fn() }));
+    const service = createService({
+      backgroundNetworkEnabled: false,
+      runGitFetch,
+      github: {
+        ...createGitHubServiceStub(),
+        retainCurrentPullRequestStatusPoll,
+      },
+    });
+
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    await vi.waitFor(() => {
+      expect(service.peekSnapshot(REPO_CWD)).not.toBeNull();
+    });
+    await vi.advanceTimersByTimeAsync(180_000);
+    await flushPromises();
+
+    expect(runGitFetch).not.toHaveBeenCalled();
+    expect(retainCurrentPullRequestStatusPoll).not.toHaveBeenCalled();
 
     subscription.unsubscribe();
     service.dispose();
