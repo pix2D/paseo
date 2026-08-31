@@ -160,7 +160,7 @@ function createServer(
   };
 
   const server = new VoiceAssistantWebSocketServer(
-    createStub<HTTPServer>({}),
+    createStub<HTTPServer>({ on: vi.fn(), off: vi.fn() }),
     createStub<pino.Logger>(createLogger()),
     "srv-test",
     createStub<AgentManager>(agentManager),
