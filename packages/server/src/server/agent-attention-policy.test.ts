@@ -226,9 +226,9 @@ describe("computeNotificationPlan", () => {
 });
 
 describe("isPushEligibleAttentionReason", () => {
-  it("allows push for finished and permission but not error", () => {
+  it("allows push for every attention reason", () => {
     expect(isPushEligibleAttentionReason("finished")).toBe(true);
     expect(isPushEligibleAttentionReason("permission")).toBe(true);
-    expect(isPushEligibleAttentionReason("error")).toBe(false);
+    expect(isPushEligibleAttentionReason("error")).toBe(true);
   });
 });
