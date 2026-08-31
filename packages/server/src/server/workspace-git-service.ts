@@ -396,6 +396,7 @@ interface WorkspaceGitServiceOptions {
   logger: pino.Logger;
   paseoHome: string;
   worktreesRoot?: string;
+  backgroundNetworkEnabled?: boolean;
   fileObserver?: FileObserver;
   deps?: Partial<WorkspaceGitServiceDependencies>;
 }
@@ -587,6 +588,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   private readonly logger: pino.Logger;
   private readonly paseoHome: string;
   private readonly worktreesRoot: string | undefined;
+  private readonly backgroundNetworkEnabled: boolean;
   private readonly fileObserver: FileObserver;
   private readonly deps: WorkspaceGitServiceDependencies;
   private readonly forgeResolver: ForgeResolver;
@@ -638,6 +640,7 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     this.logger = options.logger.child({ module: "workspace-git-service" });
     this.paseoHome = options.paseoHome;
     this.worktreesRoot = options.worktreesRoot;
+    this.backgroundNetworkEnabled = options.backgroundNetworkEnabled ?? true;
     this.fileObserver = options.fileObserver ?? createFileObserver();
     this.deps = resolveWorkspaceGitServiceDeps(
       this.fileObserver.subscribe.bind(this.fileObserver),
@@ -2181,6 +2184,9 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     if (!hasOrigin) {
       return;
     }
+    if (!this.backgroundNetworkEnabled) {
+      return;
+    }
     repoTarget.intervalId = setInterval(() => {
       void this.runRepoFetch(repoTarget);
     }, BACKGROUND_GIT_FETCH_INTERVAL_MS);
@@ -2756,6 +2762,10 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
   }
 
   private updateForgePrStatusPollForTarget(target: WorkspaceGitTarget): void {
+    if (!this.backgroundNetworkEnabled) {
+      this.stopForgePrStatusPollForTarget(target);
+      return;
+    }
     if (target.listeners.size === 0) {
       this.stopForgePrStatusPollForTarget(target);
       return;
