@@ -3321,6 +3321,8 @@ class ClaudeAgentSession implements AgentSession {
       ...(effort ? { effort } : {}),
       ...providerOptions,
       ...settingsOptions,
+      // Request visible summaries even when the model defaults to omitted thinking.
+      extraArgs: { "thinking-display": "summarized", ...providerOptions?.extraArgs },
       // Provider subagent panes render the child's nested transcript.
       forwardSubagentText: true,
       hooks: this.buildSubagentEffortHooks(),
