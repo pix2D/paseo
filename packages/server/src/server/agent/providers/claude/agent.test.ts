@@ -796,6 +796,33 @@ describe("ClaudeAgentSession features", () => {
     await session.close();
   });
 
+  test.each([undefined, "high", "ultracode", "off"])(
+    "requests thinking summaries with thinking option %s",
+    async (thinkingOptionId) => {
+      const { queryFactory, launches } = createQueryMock();
+      const client = new ClaudeAgentClient({
+        logger,
+        queryFactory,
+        resolveBinary: async () => "/test/claude/bin",
+      });
+      const session = await client.createSession({
+        provider: "claude",
+        cwd: process.cwd(),
+        model: "claude-sonnet-5",
+        thinkingOptionId,
+      });
+
+      try {
+        await session.startTurn("hello");
+        expect(launches[0]?.options.extraArgs).toMatchObject({
+          "thinking-display": "summarized",
+        });
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   test("passes extra Claude Code CLI arguments to the SDK", async () => {
     const { queryFactory, launches } = createQueryMock();
     const client = new ClaudeAgentClient({
@@ -815,7 +842,11 @@ describe("ClaudeAgentSession features", () => {
       turnId: expect.stringMatching(/^foreground-turn-/),
     });
 
-    expect(launches[0]?.options.extraArgs).toEqual({ chrome: null, model: "x" });
+    expect(launches[0]?.options.extraArgs).toEqual({
+      "thinking-display": "summarized",
+      chrome: null,
+      model: "x",
+    });
     await session.close();
   });
 
