@@ -1,0 +1,62 @@
+name: Sandbox build
+
+# Fork-only: publishes prebuilt /opt/paseo trees for bb sandbox VMs to the
+# sandbox-latest prerelease. Prerelease keeps deploy-website.yml from firing.
+on:
+  push:
+    branches: [sandbox]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sandbox-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Build in Debian trixie
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/out:/out" debian:trixie-slim \
+            sh /src/scripts/sandbox-build.sh /src /out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paseo-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/out/paseo-linux-${{ matrix.arch }}.tar.gz
+            ${{ runner.temp }}/out/COMMIT
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish sandbox-latest
+        run: |
+          gh release view sandbox-latest >/dev/null 2>&1 \
+            || gh release create sandbox-latest --prerelease --target "$GITHUB_SHA" \
+              --title "Sandbox build" --notes "Prebuilt /opt/paseo for bb sandbox VMs. Rebuilt on every push to sandbox."
+          gh release upload sandbox-latest --clobber \
+            assets/paseo-linux-x64.tar.gz assets/paseo-linux-arm64.tar.gz assets/COMMIT
+          gh api -X PATCH "repos/$GH_REPO/git/refs/tags/sandbox-latest" -f sha="$GITHUB_SHA" -F force=true
